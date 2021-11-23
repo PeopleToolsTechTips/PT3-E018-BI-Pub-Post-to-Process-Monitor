@@ -1,0 +1,187 @@
+/*********************************************************/
+/** PeoopleTools Tech Tips            		            **/
+/** Randy Groncki 2021-11-22          	                **/
+/** peopletoolstechtips@gmail.com                       **/
+/** BI Publisher                                        **/
+/** BI Pub Send Batch Reports to Process Monitor        **/
+/*********************************************************/
+
+import PSXP_XMLGEN:*;
+import PSXP_RPTDEFNMANAGER:*;
+
+Local PSXP_RPTDEFNMANAGER:ReportDefn &oRptDefn;
+Local PSXP_XMLGEN:RowSetDS &oXML_GENERATOR;
+
+Local number &i;
+Local ApiObject &PSMessages;
+Local number &MsgSetNbr, &MsgNbr;
+Local boolean &bResult;
+
+Local number &nOrigPSMessagesMode = %Session.PSMessagesMode;
+%Session.PSMessagesMode = 1;
+
+Local string &RunControlId = X_PT3_RPT1_AET.RUN_CNTL_ID;
+Local number &ProcessInstance = X_PT3_RPT1_AET.PROCESS_INSTANCE;
+Local string &ReportName;
+Local string &TemplateId = X_PT3_RPT1_AET.TMPLDEFN_ID;
+Local string &LanguageCd = X_PT3_RPT1_AET.LANGUAGE_CD;
+Local date &AsOfDate = X_PT3_RPT1_AET.ASOFDATE;
+Local string &Report_type = X_PT3_RPT1_AET.PTPG_NUI_OUT_TYPE;
+Local number &OutDestFormat;
+
+Local File &oXML_File, &File_Trigger_PM;
+Local string &my_xml, &Str_Base64;
+Local string &XML_Filename_path, &Str_Filename;
+
+rem rshw ICE 1849427000;
+&bResult = True;
+
+/* choose which template to use from run control page */
+If &Report_type = "XLS" Then
+   &ReportName = "X_PT3_TX_RP2";
+   MessageBox(0, "", 0, 0, "Running Excel Template - Output always Excel");
+Else
+   &ReportName = "X_PT3_TX_RP3";
+   MessageBox(0, "", 0, 0, "Running RTF Template - Output as per user selection");
+End-If;
+
+Local Rowset &RS_X_PAYTAX_VW = CreateRowset(Record.X_PAYTAX_VW);
+
+try
+   /* get the report defn object */
+   &oRptDefn = create PSXP_RPTDEFNMANAGER:ReportDefn(&ReportName);
+   &oRptDefn.Get();
+   
+   /* if using an Excel template, output is always overriden to Excel */
+   /* else, use what the user chose on the run control page */
+   If &oRptDefn.TemplateType = "XLS" Then
+      &OutDestFormat = 8;
+   Else
+      &OutDestFormat = %OutDestFormat;
+   End-If;
+   
+   
+   rem rsh  ICE 1836783000;
+   /* set Debug to True to leave debug files under process scheduler domain, default value is False*/
+   &oRptDefn.Debug = False;
+   
+   
+   /* set UseBurstValueAsOutputFileName to name bursted report using burst values, default is false. 
+		If Descriptive name is set (&Report.Userfilename), it will override this setting*/
+   &oRptDefn.UseBurstValueAsOutputFileName = False;
+   
+   
+   /* set file path only for file output type - other types use default temporary location */
+   If %OutDestType = 2 Then /* file */
+      
+      /* set BurstValueAsOutSubDir to true to use burst value as folder names for bursted files. 
+		This should be used only when OutDestinationType is File. Default value is false*/
+      &oRptDefn.BurstValueAsOutSubDir = False;
+      
+      &oRptDefn.OutDestination = %FilePath;
+   End-If;
+   
+   /* this would normally be called from run control data */
+   /* populate the rowset for the report */
+   &RS_X_PAYTAX_VW.Fill("where emplid = 'KU0515' and state = '$U' and tax_class in ('E','D') and TO_NUMBER(TO_CHAR(pay_end_dt,'YYYY')) = 2018");
+   
+   rem create xml string from the data rowset;
+   &oXML_GENERATOR = create PSXP_XMLGEN:RowSetDS();
+   &my_xml = &oXML_GENERATOR.getXMLData(&RS_X_PAYTAX_VW, "");
+   
+   /* create XML file with the XML string */
+   &Str_Filename = "Tax_Report_" | %UserId | ".xml";
+   &oXML_File = GetFile(&Str_Filename, "W", "UTF8");
+   &oXML_File.WriteLine(&my_xml);
+   
+   /* save file name and path for publishing */
+   &XML_Filename_path = &oXML_File.Name;
+   &oXML_File.Close();
+   
+   
+   &oRptDefn.ProcessInstance = &ProcessInstance; /*mdu XXX */
+   &oRptDefn.SetRuntimeDataXMLFile(&XML_Filename_path);
+   
+   /* give the result report file a better name */
+   &oRptDefn.ReportFileName = "Tax_Report_" | %UserId;
+   
+   &oRptDefn.ProcessReport(&TemplateId, &LanguageCd, &AsOfDate, &oRptDefn.GetOutDestFormatString(&OutDestFormat));
+   
+   /* publish */
+   If %OutDestType = 6 Then /* Web */
+      rem   &oRptDefn.Publish("", "", "", &ProcessInstance);
+      
+      /* here is were we trigger it for the Process Schduler Details Page */
+      Local PSXP_RPTDEFNMANAGER:Utility &oUtility = create PSXP_RPTDEFNMANAGER:Utility();
+      Local string &sDirSep = &oUtility.GetDirSeparator();
+      
+      /* get the created report file */
+      Local string &ReportFileName = &oRptDefn.ReportFileName | "." | Lower(&oRptDefn.GetOutDestFormatString(&OutDestFormat));
+      Local string &ReportFilePath = &oRptDefn.OutDestination | &sDirSep | "RptInst" | &sDirSep | &ReportFileName;
+      
+      If FileExists(&ReportFilePath, %FilePath_Absolute) Then
+         
+         /* Read the new file as a base64 string */
+         &File_Trigger_PM = GetFile(&ReportFilePath, "R", %FilePath_Absolute);
+         &Str_Base64 = &File_Trigger_PM.GetBase64StringFromBinary();
+         &File_Trigger_PM.Close();
+         
+         /* write back to the same location with the same data */
+         &File_Trigger_PM = GetFile(&ReportFilePath, "W", %FilePath_Absolute);
+         &File_Trigger_PM.WriteBase64StringToBinary(&Str_Base64);
+         &File_Trigger_PM.Close();
+         
+         MessageBox(0, "", 0, 0, "File:" | Char(10) | "%1" | Char(10) | "now avail in Process Monitor", &ReportFilePath);
+      Else
+         MessageBox(0, "", 0, 0, "Could not find file:" | Char(10) | "%1 ", &ReportFilePath);
+         
+      End-If;
+      
+   Else
+      If %OutDestType = 3 Then /* Printer */
+         &oRptDefn.PrintOutput(%FilePath);
+      Else
+         If %OutDestType = 5 Then /* Email */
+            &bResult = &oRptDefn.EmailOutput(&ProcessInstance);
+         End-If;
+      End-If;
+   End-If;
+   
+   /* delete XML Data file */
+   &oXML_File = GetFile(&XML_Filename_path, "R", %FilePath_Absolute);
+   &oXML_File.Delete();
+   
+   
+catch Exception &Err
+   rem rsh ICE 1836783000;
+   If Not &oRptDefn = Null Then
+      &oRptDefn.Close();
+   End-If;
+   WriteToLog(%ApplicationLogFence_Error, &Err.ToString());
+   
+   rem rsh: Outpout exception message to to Message Log;
+   &Err.Output();
+end-try;
+
+rem rshw ICE 1849427000;
+If &bResult = False Then
+   &oRptDefn.Close();
+End-If;
+
+
+%Session.PSMessagesMode = &nOrigPSMessagesMode;
+
+
+/* check session message for errors */
+If %Session.PSmessages.Count > 0 Then
+   &PSMessages = %Session.PSmessages;
+   For &i = 1 To &PSMessages.Count
+      If (&PSMessages.Item(&i).MessageType <= 1) Then
+         &MsgSetNbr = &PSMessages.Item(&i).MessageSetNumber;
+         &MsgNbr = &PSMessages.Item(&i).MessageNumber;
+         WriteToLog(%ApplicationLogFence_Error, MsgGet(&MsgSetNbr, &MsgNbr, "Message Not Found : " | &MsgSetNbr | "," | &MsgNbr));
+         &bResult = False;
+         Break;
+      End-If;
+   End-For;
+End-If;
