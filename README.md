@@ -1,4 +1,4 @@
-# PT3 E018 BI Pub Posting Reports to Process Montir
+# PT3 E018 BI Pub Posting Reports to Process Monitor
 Post a batch BI Pub Report to the Process Monitor
 
 PeopleTools Tech Tips    
