@@ -11,7 +11,7 @@ Using a quick change, we can get BI Publisher Reports generated through the Proc
 
 ### Walkthrough Documentation: See PDF
 
-### YouTube demo: Stay Tuned
+### YouTube demo: https://youtu.be/k-0VYlgeDEk
 
 ### Contact:  
 * randy@peopletoolstechtips.com  
